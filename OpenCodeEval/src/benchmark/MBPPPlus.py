@@ -61,42 +61,67 @@ class MBPPPlus(Benchmark):
         self.num_workers = num_workers
         self.timeout = timeout
         self.prompt_type = prompt_type
+        self.tasks = self.get_task()
+
 
     def get_task(self):
+        """
+        Get the task data from the jsonl file into a dictionary.
+        """
 
-        return list(stream_jsonl(filename = self.path))
+        tasks = {}
+        
+        for task_data in stream_jsonl(filename=self.path):
+
+            task_id = int(task_data["task_id"])
+            
+            tasks[task_id] = task_data
+        
+        return tasks
     
     def format_prompt(self, 
                      promblem: str,
                      test: str,
                      ) -> str:
-        # promblem = f"You are an expert Python programmer, and here is your task:\n{promblem}\n"
-        # test = f"Your code should pass the test:\n{test}\n"
-        # prompt = promblem + test
-        prompt = promblem + "\n" + test
+        promblem = f"You are an expert Python programmer, and here is your task:\n{promblem}\n"
+        test = f"Your code should pass the test:\n{test}\n"
+        prompt = promblem + test + "```python\n"
         return prompt
     
     def get_prompt(self):
+        """
+        Builds the prompt for the LM to generate from.
+        """
 
-        assert self.prompt_type == "Instruction", f"Prompt type must be Instruction for {self.name}"
+        assert self.prompt_type == "Instruction", "Prompt type must be Instruction for MBPP"
 
-        task_set = self.get_task()
         prompts = []
-        for task_data in task_set:
-            prompt = self.format_prompt(task_data["text"], task_data["test_list"][0])
-            prompts.append(refine_text(prompt))
-
+        for task_id, task_data in self.tasks.items():
+            prompts.append(
+                dict(
+                    task_id = task_id,
+                    prompt = refine_text(self.format_prompt(task_data["text"], task_data["test_list"][0]))
+                )
+            )
         return prompts
 
-    def postprocess_generation(self, generation_group):
-
-        solution_group = []
-        for generation_samples in generation_group:
-            solution_group.append([sanitize(generation) for generation in generation_samples])
-
-        return solution_group
+    def postprocess_generation(self, generation):
+        """
+        Postprocess the generations.
+        """
+        try:
+            solution = sanitize(generation['completion'])
+        except Exception:
+            solution = program_extract(generation['completion'], program="python", mode="all")
+        
+        return dict(
+            task_id = generation['task_id'],
+            completion_id = generation['completion_id'],
+            solution = solution
+        )
     
-    def process_results(self, solution_group):
+    
+    def process_results(self, solution):
         """Takes the list of LM generations and evaluates them against ground truth references,
         returning the metric for the generations.
         :param generations: list(list(str))
@@ -105,49 +130,22 @@ class MBPPPlus(Benchmark):
             list of str containing refrences
         """
 
-        task_set = self.get_task()
+        task_data = self.tasks[solution['task_id']]
 
-        evals = []
-        for index, task_data in enumerate(task_set):
-            task_id = task_data['task_id']
-            solutions_list = solution_group[index]
-            assert len(solutions_list) == self.num_samples, f"Num completions : {len(solutions_list)} not match Num samples: {self.num_samples}"
-            for solution_id, solution_data in enumerate(solutions_list):
+        if self.name == "MBPPPlus":
+            test_code = "\n".join(task_data['test_imports']) + "\n\n" + task_data['test']
+        elif self.name == "MBPPBase":
+            test_code = "\n".join(task_data['test_imports']) + "\n\n" + "\n".join(task_data['test_list'])
 
-                if self.name == "MBPPPlus":
-                    test_code = task_data['test']
-                elif self.name == "MBPPBase":
-                    test_code = "\n".join(task_data['test_imports']) + "\n\n" + "\n".join(task_data['test_list'])
-                else:
-                    raise ValueError(f"Invalid benchmark name: {self.name}")
-                
-                solution = (
-                    "\n".join(self.imports) + "\n\n"
-                    + solution_data + "\n\n"
-                    + "\n".join(task_data['test_imports']) + "\n\n"
-                    + test_code + "\n\n"
-                )
-                evals.append({
-                    "task_id": task_id,
-                    "solution_id": solution_id,
-                    "solution": solution
-                })
+        code =  (
+            "\n".join(self.imports) + "\n"
+            + solution['solution'] + "\n"
+            + test_code
+        )
 
-        print(evals[0]['solution'])
-
-
-        with ThreadPoolExecutor(self.num_workers) as executor:
-            futures = []
-            for eval in evals:
-                args = (eval['task_id'], eval['solution_id'], eval['solution'], self.timeout)
-                future = executor.submit(check_correctness, *args)
-                futures.append(future)
-            
-            evaluations_set = []
-            for future in tqdm(as_completed(futures), total=len(futures), desc="Completing tasks"):
-                result = future.result()
-                evaluations_set.append(result)
-
-        evaluations_set = sorted(evaluations_set, key = lambda x: (x['task_id'], x['solution_id']))
-
-        return evaluations_set
+        result = check_correctness(solution['task_id'],
+                                   solution['completion_id'],
+                                   code,
+                                   self.timeout)
+        
+        return result
