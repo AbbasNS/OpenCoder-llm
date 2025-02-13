@@ -24,7 +24,7 @@ class MBPP(Benchmark):
 
     def __init__(self,
                  name:str = "MBPP",
-                 timeout:float = 3.0,
+                 timeout:float = 9.0,
                  prompt_type:str = "Instruction"): 
         super().__init__()
         
@@ -68,14 +68,12 @@ class MBPP(Benchmark):
                     ) -> str:
         promblem = f"You are an expert Python programmer, and here is your task:\n{promblem}"
         test = "\n".join(tests)
-        test = f"Your code should pass these tests:\n{test}\n"
+        test = f"Write Python code that pass the following test:\n```python{test}```\n"
         prompt = promblem + test
         if code:
             code = refine_text(code)
             code = f"\n```python\n{code}\n```\n"
             prompt = prompt + code
-        else:
-            prompt = prompt + "\n```python\n"
         return prompt
     
     def get_few_shots_prompts(self):
@@ -93,12 +91,14 @@ class MBPP(Benchmark):
 
         assert self.prompt_type == "Instruction", "Prompt type must be Instruction for MBPP"
 
-        few_shots_prompts = self.get_few_shots_prompts()
+        #few_shots_prompts = self.get_few_shots_prompts()
         prompts = []
 
         for task_id, task_data in self.tasks.items():
             if task_id >= self.test_start and task_id < self.test_end:
-                prompt = few_shots_prompts + '\n' + self.format_prompt(task_data["text"], task_data["test_list"])
+                # temporary to avoid code extraction bug with many test cases
+                # prompt = few_shots_prompts + '\n' + self.format_prompt(task_data["text"], task_data["test_list"])
+                prompt = self.format_prompt(task_data["text"], [task_data["test_list"][0]])
                 prompts.append({
                     'task_id': task_id,
                     'prompt': prompt

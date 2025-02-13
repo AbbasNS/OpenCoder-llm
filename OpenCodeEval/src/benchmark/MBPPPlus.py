@@ -84,8 +84,8 @@ class MBPPPlus(Benchmark):
                      test: str,
                      ) -> str:
         promblem = f"You are an expert Python programmer, and here is your task:\n{promblem}\n"
-        test = f"Your code should pass the test:\n{test}\n"
-        prompt = promblem + test + "```python\n"
+        test = f"Write Python code that pass the following test:\n```python{test}```\n"
+        prompt = promblem + test
         return prompt
     
     def get_prompt(self):
